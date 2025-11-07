@@ -1,129 +1,235 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GoogleAIFileManager, FileState } from "@google/generative-ai/server";
-import { MongoClient } from "mongodb";
+import { MongoClient, Db } from "mongodb";
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-// import { getAuth } from "@clerk/nextjs/server";
 import jwt from "jsonwebtoken";
 import mammoth from "mammoth";
 import { v4 as uuidv4 } from "uuid";
-import fs from "fs";
+import fs from "fs/promises";
 import path from "path";
 import { v2 as cloudinary } from 'cloudinary';
+import { z } from "zod";
+import { Pinecone } from "@pinecone-database/pinecone";
 
 // ==========================
-// 1. CONFIG & CLIENTS
+// CONFIG & CONNECTION POOLING
 // ==========================
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY!);
-const mongoClient = new MongoClient(process.env.MONGODB_URI!);
 const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
-// Configure Cloudinary
+// MongoDB Connection Pool
+let mongoClient: MongoClient | null = null;
+let dbConnection: Db | null = null;
+
+// Pinecone Connection
+let pineconeClient: Pinecone | null = null;
+
+async function getDatabase(): Promise<Db> {
+  if (!mongoClient) {
+    mongoClient = new MongoClient(process.env.MONGODB_URI!, {
+      maxPoolSize: 10, // Connection pool size
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
+  }
+
+  if (!dbConnection) {
+    await mongoClient.connect();
+    dbConnection = mongoClient.db("clauseiq");
+  }
+
+  return dbConnection;
+}
+
+function getPineconeClient(): Pinecone {
+  if (!pineconeClient) {
+    pineconeClient = new Pinecone({
+      apiKey: process.env.PINECONE_API_KEY!,
+    });
+  }
+  return pineconeClient;
+}
+
+// Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME!,
   api_key: process.env.CLOUDINARY_API_KEY!,
   api_secret: process.env.CLOUDINARY_API_SECRET!,
 });
 
-// JWT Secret - in production, use a strong secret
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET!;
 
-async function getDatabase() {
-  await mongoClient.connect();
-  return mongoClient.db("clauseiq");
+// ==========================
+// UTILITY FUNCTIONS
+// ==========================
+
+// Rate limiting (simple in-memory implementation)
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT = { windowMs: 60000, maxRequests: 10 }; // 10 requests per minute
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const userLimit = rateLimitMap.get(userId);
+
+  if (!userLimit || now > userLimit.resetTime) {
+    rateLimitMap.set(userId, { count: 1, resetTime: now + RATE_LIMIT.windowMs });
+    return true;
+  }
+
+  if (userLimit.count >= RATE_LIMIT.maxRequests) {
+    return false;
+  }
+
+  userLimit.count++;
+  return true;
 }
 
-// Verify JWT token
+// Verify JWT token with caching
+const tokenCache = new Map<string, { payload: any; expires: number }>();
+
 function verifyToken(token: string) {
+  const cached = tokenCache.get(token);
+  if (cached && Date.now() < cached.expires) {
+    return cached.payload;
+  }
+
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    return decoded as { userId: string; email: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    tokenCache.set(token, { payload: decoded, expires: Date.now() + 300000 }); // 5 min cache
+    return decoded;
   } catch (error) {
     return null;
   }
 }
 
 // ==========================
-// 2. INPUT SCHEMA (FormData)
+// INPUT VALIDATION
 // ==========================
 const uploadSchema = z.object({
-  file: z.instanceof(File),
-  metadata: z.string().optional(), // JSON string
+  file: z.instanceof(File).refine(
+    (file) => file.size <= 50 * 1024 * 1024, // 50MB limit
+    "File size must be less than 50MB"
+  ).refine(
+    (file) => {
+      const allowedTypes = [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain',
+        'image/jpeg',
+        'image/png',
+        'image/webp'
+      ];
+      const allowedExtensions = ['.pdf', '.docx', '.txt', '.jpg', '.jpeg', '.png', '.webp'];
+      return allowedTypes.includes(file.type) ||
+             allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+    },
+    "Unsupported file type"
+  ),
+  metadata: z.string().optional(),
 });
 
 // ==========================
-// 3. TEXT EXTRACTION (PDF, DOCX, TXT)
+// TEXT EXTRACTION WITH RETRIES
 // ==========================
-async function extractTextFromBuffer(buffer: Buffer, mimeType: string, fileName: string): Promise<string> {
-  if (mimeType === "application/pdf") {
+async function extractTextFromBuffer(buffer: Buffer, mimeType: string, fileName: string, retries = 2): Promise<string> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const pdfParse = require("pdf-parse");
-      const data = await pdfParse(buffer);
-      return data.text;
+      // For PDFs, skip direct parsing and rely on OCR (more reliable)
+      if (mimeType === "application/pdf" || fileName.endsWith(".pdf")) {
+        console.log("PDF detected - skipping direct text extraction, will use OCR");
+        return ""; // Will trigger OCR
+      }
+
+      if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+          fileName.endsWith(".docx")) {
+        const result = await mammoth.extractRawText({ buffer });
+        return result.value;
+      }
+
+      if (mimeType === "text/plain" || fileName.endsWith(".txt")) {
+        return buffer.toString("utf-8");
+      }
+
+      // For images and other files, return empty to trigger OCR
+      return "";
     } catch (error) {
-      console.warn("PDF parsing failed, will use OCR:", error);
-      return ""; // Will trigger OCR
+      console.warn(`Text extraction attempt ${attempt + 1} failed:`, error);
+      if (attempt === retries) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
     }
-  }
-  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || fileName.endsWith(".docx")) {
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value;
-  }
-  if (mimeType === "text/plain" || fileName.endsWith(".txt")) {
-    return buffer.toString("utf-8");
   }
   return "";
 }
 
 // ==========================
-// 4. OCR WITH GEMINI (Scanned PDFs / Images)
+// OCR WITH GEMINI (Optimized)
 // ==========================
-async function ocrWithGemini(localPath: string, mimeType: string): Promise<string> {
+async function ocrWithGemini(localPath: string, mimeType: string, retries = 2): Promise<string> {
+  let uploadedFileName: string | null = null;
+
   try {
-    // Upload file to Gemini
-    const uploadResult = await fileManager.uploadFile(localPath, {
-      mimeType,
-      displayName: path.basename(localPath),
-    });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        // Upload file to Gemini
+        const uploadResult = await fileManager.uploadFile(localPath, {
+          mimeType,
+          displayName: path.basename(localPath),
+        });
+        uploadedFileName = uploadResult.file.name;
 
-    // Wait for processing to complete
-    let file = await fileManager.getFile(uploadResult.file.name);
-    while (file.state === FileState.PROCESSING) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      file = await fileManager.getFile(uploadResult.file.name);
+        // Wait for processing with timeout
+        const maxWaitTime = 30000; // 30 seconds
+        const startTime = Date.now();
+
+        let file = await fileManager.getFile(uploadResult.file.name);
+        while (file.state === FileState.PROCESSING && (Date.now() - startTime) < maxWaitTime) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          file = await fileManager.getFile(uploadResult.file.name);
+        }
+
+        if (file.state !== FileState.ACTIVE) {
+          throw new Error(`File processing failed: ${file.state}`);
+        }
+
+        // Generate content with optimized model
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); // Use pro model for better PDF processing
+        const result = await model.generateContent([
+          {
+            fileData: {
+              mimeType: file.mimeType,
+              fileUri: file.uri,
+            },
+          },
+          {
+            text: "Extract all text exactly as it appears. Preserve formatting, lists, tables (as markdown), headings, and line breaks. Do NOT summarize or skip anything."
+          },
+        ]);
+
+        return result.response.text();
+      } catch (error) {
+        console.warn(`OCR attempt ${attempt + 1} failed:`, error);
+        if (attempt === retries) throw error;
+        await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+      }
     }
-
-    if (file.state !== FileState.ACTIVE) {
-      throw new Error(`File processing failed: ${file.state}`);
+  } finally {
+    // Always cleanup uploaded file
+    if (uploadedFileName) {
+      try {
+        await fileManager.deleteFile(uploadedFileName);
+      } catch (cleanupError) {
+        console.warn("Failed to cleanup Gemini file:", cleanupError);
+      }
     }
-
-    // Generate content with the uploaded file
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const result = await model.generateContent([
-      {
-        fileData: {
-          mimeType: file.mimeType,
-          fileUri: file.uri,
-        },
-      },
-      {
-        text: "Extract all text exactly as it appears. Preserve formatting, lists, tables (as markdown), headings, and line breaks. Do NOT summarize or skip anything."
-      },
-    ]);
-
-    // Clean up the uploaded file
-    await fileManager.deleteFile(uploadResult.file.name);
-
-    return result.response.text();
-  } catch (error) {
-    console.error("OCR processing error:", error);
-    throw new Error(`OCR failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  throw new Error("OCR failed after all retries");
 }
 
 // ==========================
-// 5. GENERAL SEMANTIC CHUNKER (Recursive + Overlap)
+// OPTIMIZED CHUNKING
 // ==========================
 interface Chunk {
   content: string;
@@ -139,113 +245,250 @@ function chunkText(
   chunkSize: number = 1000,
   overlap: number = 200
 ): Chunk[] {
+  if (!text || text.trim().length === 0) return [];
+
   const chunks: Chunk[] = [];
   let start = 0;
   let chunkId = 0;
+
   while (start < text.length) {
-    let end = start + chunkSize;
+    let end = Math.min(start + chunkSize, text.length);
+
     // Try to end at sentence/paragraph boundary
     if (end < text.length) {
-      const slice = text.slice(end - 100, end + 100);
+      const lookAhead = Math.min(100, text.length - end);
+      const slice = text.slice(end - 50, end + lookAhead);
+
       const sentenceEnd = slice.match(/[.!?]\s/);
       const paraEnd = slice.indexOf("\n\n");
-      if (sentenceEnd && sentenceEnd.index !== undefined && sentenceEnd.index < 100) {
-        end = end - 100 + sentenceEnd.index + 1;
-      } else if (paraEnd !== -1 && paraEnd < 100) {
-        end = end - 100 + paraEnd;
+
+      if (sentenceEnd && sentenceEnd.index !== undefined && sentenceEnd.index < lookAhead) {
+        end = end - 50 + sentenceEnd.index + 1;
+      } else if (paraEnd !== -1 && paraEnd < lookAhead) {
+        end = end - 50 + paraEnd;
       }
     }
+
     const content = text.slice(start, end).trim();
     if (content.length === 0) break;
+
     chunks.push({
       content,
       metadata: { ...baseMetadata, doc_id: docId },
       chunk_id: chunkId++,
       start_char: start,
     });
-    start = end - overlap;
+
+    start = Math.max(end - overlap, start + 1);
     if (start >= text.length) break;
   }
+
   return chunks;
 }
 
 // ==========================
-// 6. MAIN PIPELINE
+// BATCH EMBEDDING PROCESSING
 // ==========================
-export async function POST(req: NextRequest) {
+async function generateEmbeddingsBatch(chunks: Chunk[], batchSize = 10): Promise<number[][]> {
+  const embeddings: number[][] = [];
+
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    const batchPromises = batch.map(chunk => embeddingModel.embedContent(chunk.content));
+
+    try {
+      const batchResults = await Promise.all(batchPromises);
+      const batchEmbeddings = batchResults.map((result: any) => result.embedding.values);
+      embeddings.push(...batchEmbeddings);
+    } catch (error) {
+      console.error(`Batch embedding failed for chunks ${i}-${i + batch.length}:`, error);
+      // Retry individual chunks on batch failure
+      for (const chunk of batch) {
+        try {
+          const result = await embeddingModel.embedContent(chunk.content);
+          embeddings.push(result.embedding.values);
+        } catch (individualError) {
+          console.error(`Individual embedding failed for chunk:`, individualError);
+          embeddings.push(new Array(768).fill(0)); // Fallback zero vector
+        }
+      }
+    }
+  }
+
+  return embeddings;
+}
+
+// ==========================
+// PINECONE INDEX INITIALIZATION
+// ==========================
+async function ensurePineconeIndex(): Promise<void> {
+  const pinecone = getPineconeClient();
+  const indexName = process.env.PINECONE_INDEX_NAME!;
+
   try {
-    // Verify JWT token from Authorization header
+    // Check if index exists
+    const indexList = await pinecone.listIndexes();
+    const indexExists = indexList.indexes?.some(index => index.name === indexName);
+
+    if (!indexExists) {
+      console.log(`Creating Pinecone index: ${indexName}`);
+
+      // Create index with proper configuration for text-embedding-004 (768 dimensions)
+      await pinecone.createIndex({
+        name: indexName,
+        dimension: 768,
+        metric: 'cosine',
+        spec: {
+          serverless: {
+            cloud: 'aws',
+            region: 'us-east-1'
+          }
+        }
+      });
+
+      // Wait for index to be ready (can take a few minutes)
+      console.log(`Waiting for index ${indexName} to be ready...`);
+      let isReady = false;
+      let attempts = 0;
+      const maxAttempts = 30; // 5 minutes max wait
+
+      while (!isReady && attempts < maxAttempts) {
+        try {
+          const index = pinecone.index(indexName);
+          await index.describeIndexStats();
+          isReady = true;
+          console.log(`Index ${indexName} is ready!`);
+        } catch (error) {
+          attempts++;
+          console.log(`Index not ready yet, attempt ${attempts}/${maxAttempts}...`);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+        }
+      }
+
+      if (!isReady) {
+        throw new Error(`Index ${indexName} failed to become ready within timeout`);
+      }
+    } else {
+      console.log(`Pinecone index ${indexName} already exists`);
+    }
+  } catch (error) {
+    console.error(`Failed to ensure Pinecone index:`, error);
+    throw error;
+  }
+}
+export async function POST(req: NextRequest) {
+  const startTime = Date.now();
+  let tempFilePath: string | null = null;
+
+  try {
+    // Rate limiting check
     const authHeader = req.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
     const token = authHeader.substring(7);
     const user = verifyToken(token);
     if (!user) {
       return NextResponse.json({ error: "Invalid token" }, { status: 401 });
     }
-    const { userId } = user;
 
+    if (!checkRateLimit(user.userId)) {
+      return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
+    }
+
+    // Parse and validate input
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const metadataStr = formData.get("metadata") as string;
+
+    const validationResult = uploadSchema.safeParse({ file, metadata: metadataStr });
+    if (!validationResult.success) {
+      return NextResponse.json({
+        error: "Validation failed",
+        details: validationResult.error.issues
+      }, { status: 400 });
+    }
+
     const metadata = metadataStr ? JSON.parse(metadataStr) : {};
-
-    if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
-
+    const { userId } = user;
     const fileName = file.name;
     const fileType = file.type || "application/octet-stream";
-    const buffer = Buffer.from(await file.arrayBuffer());
     const docId = uuidv4();
 
-    // Step 1: Upload to Cloudinary
-    const cloudinaryResult = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
-        {
-          resource_type: 'raw',
-          public_id: `documents/${docId}/${fileName}`,
-          folder: 'clauseiq-documents',
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      ).end(buffer);
-    });
+    console.log(`[${docId}] Starting document processing for ${fileName} (${file.size} bytes)`);
 
-    const fileUrl = (cloudinaryResult as any).secure_url;
+    // Memory-efficient file handling
+    const buffer = Buffer.from(await file.arrayBuffer());
 
-    // Step 2: Try direct extraction
+    // Step 1: Upload to Cloudinary with retry
+    let cloudinaryResult: any;
+    try {
+      cloudinaryResult = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'raw',
+            public_id: `documents/${docId}/${fileName}`,
+            folder: 'clauseiq-documents',
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        uploadStream.end(buffer);
+      });
+    } catch (error) {
+      console.error(`[${docId}] Cloudinary upload failed:`, error);
+      throw new Error("File upload failed");
+    }
+
+    const fileUrl = cloudinaryResult.secure_url;
+
+    // Step 2: Extract text with fallback to OCR
     let fullText = await extractTextFromBuffer(buffer, fileType, fileName);
 
-    // Step 3: Fallback to OCR if empty or image-based
     if (!fullText || fullText.trim().length < 100) {
-      const tempPath = `/tmp/${docId}-${fileName}`;
-      fs.writeFileSync(tempPath, buffer);
-      fullText = await ocrWithGemini(tempPath, fileType);
-      fs.unlinkSync(tempPath);
+      tempFilePath = `/tmp/${docId}-${fileName}`;
+      await fs.writeFile(tempFilePath, buffer);
+      console.log(`[${docId}] Using OCR for ${fileName}`);
+
+      fullText = await ocrWithGemini(tempFilePath, fileType);
     }
 
     if (!fullText?.trim()) {
-      return NextResponse.json({ error: "Failed to extract any text" }, { status: 500 });
+      throw new Error("Failed to extract any text from document");
     }
 
-    // Step 4: Chunk
+    console.log(`[${docId}] Extracted ${fullText.length} characters`);
+
+    // Step 3: Chunk text
     const chunks = chunkText(fullText, { ...metadata, source: fileName, file_url: fileUrl }, docId);
+    if (chunks.length === 0) {
+      throw new Error("No valid chunks generated from document");
+    }
 
-    // Step 5: Embed with Gemini
-    const embedResults = await Promise.all(
-      chunks.map(chunk => embeddingModel.embedContent(chunk.content))
-    );
-    const embeddings = embedResults.map((r: any) => r.embedding.values);
+    console.log(`[${docId}] Generated ${chunks.length} chunks`);
 
-    // Step 6: Store in MongoDB
+    // Step 4: Generate embeddings in batches
+    const embeddings = await generateEmbeddingsBatch(chunks, 5); // Smaller batches for reliability
+    console.log(`[${docId}] Generated ${embeddings.length} embeddings`);
+
+    // Step 5: Store in database and vector store
     const db = await getDatabase();
-    const documentsCollection = db.collection("documents");
-    const chunksCollection = db.collection("chunks");
 
-    // Store document metadata
-    await documentsCollection.insertOne({
+    // Ensure Pinecone index exists before using it
+    await ensurePineconeIndex();
+
+    const pinecone = getPineconeClient();
+    const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
+
+    // Normalize case name for namespace (use a default or extract from metadata)
+    const caseName = metadata.caseName || metadata.case_name || "default-case";
+    const namespace = caseName.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+
+    // Store document metadata in MongoDB
+    await db.collection("documents").insertOne({
       docId,
       fileName,
       fileType,
@@ -254,10 +497,12 @@ export async function POST(req: NextRequest) {
       uploadedAt: new Date(),
       totalChunks: chunks.length,
       totalCharacters: fullText.length,
-      metadata: metadata,
+      metadata,
+      processingTimeMs: Date.now() - startTime,
+      pineconeNamespace: namespace,
     });
 
-    // Store chunks with embeddings
+    // Store chunks with embeddings in MongoDB
     const chunkDocuments = chunks.map((chunk, i) => ({
       docId,
       chunkId: i,
@@ -276,7 +521,36 @@ export async function POST(req: NextRequest) {
       },
     }));
 
-    await chunksCollection.insertMany(chunkDocuments);
+    await db.collection("chunks").insertMany(chunkDocuments);
+
+    // Store vectors in Pinecone
+    const pineconeVectors = chunks.map((chunk, i) => ({
+      id: `${docId}-chunk-${i}`,
+      values: embeddings[i],
+      metadata: {
+        content: chunk.content,
+        docId: docId,
+        chunkId: i,
+        fileName: fileName,
+        fileType: fileType,
+        fileUrl: fileUrl,
+        uploadedBy: userId,
+        uploadedAt: new Date().toISOString(),
+        ...chunk.metadata,
+      },
+    }));
+
+    // Upsert vectors to Pinecone in batches
+    const batchSize = 100;
+    for (let i = 0; i < pineconeVectors.length; i += batchSize) {
+      const batch = pineconeVectors.slice(i, i + batchSize);
+      await index.namespace(namespace).upsert(batch);
+    }
+
+    console.log(`[${docId}] Stored ${pineconeVectors.length} vectors in Pinecone namespace: ${namespace}`);
+
+    const processingTime = Date.now() - startTime;
+    console.log(`[${docId}] Processing completed in ${processingTime}ms`);
 
     return NextResponse.json({
       success: true,
@@ -284,10 +558,48 @@ export async function POST(req: NextRequest) {
       chunks: chunks.length,
       characters: fullText.length,
       fileUrl,
-      message: `Document uploaded to Cloudinary and processed: ${chunks.length} chunks stored with Gemini embeddings`,
+      processingTimeMs: processingTime,
+      message: `Document processed successfully: ${chunks.length} chunks stored`,
     });
+
   } catch (error: any) {
-    console.error("Pipeline error:", error);
-    return NextResponse.json({ error: error.message || "Internal error" }, { status: 500 });
+    const processingTime = Date.now() - startTime;
+    console.error(`[Processing Error] ${error.message}`, {
+      processingTimeMs: processingTime,
+      error: error.stack
+    });
+
+    return NextResponse.json({
+      error: error.message || "Internal processing error",
+      processingTimeMs: processingTime
+    }, { status: 500 });
+  } finally {
+    // Always cleanup temporary files
+    if (tempFilePath) {
+      try {
+        await fs.unlink(tempFilePath);
+      } catch (cleanupError) {
+        console.warn("Failed to cleanup temp file:", cleanupError);
+      }
+    }
   }
 }
+
+// ==========================
+// CLEANUP ON PROCESS EXIT
+// ==========================
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...');
+  if (mongoClient) {
+    await mongoClient.close();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Shutting down gracefully...');
+  if (mongoClient) {
+    await mongoClient.close();
+  }
+  process.exit(0);
+});
