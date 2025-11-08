@@ -36,15 +36,26 @@ export default function SearchBox({ onSearch }: { onSearch: (query: string) => v
         onChange={(e) => setQuery(e.target.value)}
         onKeyPress={handleKeyPress}
         placeholder="Ask anything about your documents..."
-        className="w-full h-32 p-4 text-lg border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 shadow-sm"
-        rows={4}
+        className="w-full h-40 p-6 text-lg rounded-xl resize-none shadow-chatgpt hover:shadow-chatgpt-hover focus:shadow-chatgpt-hover transition-all duration-200"
+        style={{
+          backgroundColor: 'var(--background-secondary)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-subtle)'
+        }}
+        rows={5}
       />
       <button
         onClick={handleSubmit}
         disabled={!query.trim()}
-        className="absolute bottom-3 right-3 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed dark:focus:ring-offset-gray-900"
+        className="absolute bottom-4 right-4 p-3 rounded-xl shadow-chatgpt hover:shadow-chatgpt-hover disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        style={{
+          backgroundColor: 'var(--accent)',
+          color: '#ffffff'
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
         </svg>
       </button>
