@@ -1,2 +1,95 @@
-@import "tailwindcss";
+@import "tailwindcss";@import "tailwindcss";
 
+
+
+:root {:root {
+
+  --background: #ffffff;  --background: #ffffff;
+
+  --foreground: #171717;  --foreground: #171717;
+
+}  --card: #ffffff;
+
+  --card-foreground: #171717;
+
+@media (prefers-color-scheme: dark) {  --popover: #ffffff;
+
+  :root {  --popover-foreground: #171717;
+
+    --background: #0a0a0a;  --primary: #2563eb;
+
+    --foreground: #ededed;  --primary-foreground: #ffffff;
+
+  }  --secondary: #f1f5f9;
+
+}  --secondary-foreground: #0f172a;
+
+  --muted: #f1f5f9;
+
+body {  --muted-foreground: #64748b;
+
+  background-color: hsl(var(--background));  --accent: #f1f5f9;
+
+  color: hsl(var(--foreground));  --accent-foreground: #0f172a;
+
+}  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #2563eb;
+  --radius: 0.5rem;
+  --font-geist-sans: 'Geist', sans-serif;
+  --font-geist-mono: 'Geist Mono', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --card: #1a1a1a;
+    --card-foreground: #ededed;
+    --popover: #1a1a1a;
+    --popover-foreground: #ededed;
+    --primary: #3b82f6;
+    --primary-foreground: #ffffff;
+    --secondary: #1e293b;
+    --secondary-foreground: #f1f5f9;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --accent: #1e293b;
+    --accent-foreground: #f1f5f9;
+    --destructive: #dc2626;
+    --destructive-foreground: #ffffff;
+    --border: #334155;
+    --input: #334155;
+    --ring: #3b82f6;
+  }
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Ensure proper text contrast */
+.text-foreground {
+  color: hsl(var(--foreground));
+}
+
+.text-muted-foreground {
+  color: hsl(var(--muted-foreground));
+}
+
+/* Fix any remaining contrast issues */
+.bg-card {
+  background-color: hsl(var(--card));
+}
+
+.text-card-foreground {
+  color: hsl(var(--card-foreground));
+}
