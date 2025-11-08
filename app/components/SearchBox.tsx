@@ -15,30 +15,50 @@ export default function SearchBox({ onSearch }: { onSearch: (query: string) => v
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSearch(query);
+    if (query.trim()) {
+      onSearch(query);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (query.trim()) {
+        onSearch(query);
+      }
+    }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <label htmlFor="search-query" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Search Query
-        </label>
-        <input
-          id="search-query"
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Enter search terms..."
-          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm placeholder-gray-400 dark:placeholder-gray-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-        />
-      </div>
+    <div className="relative">
+      <textarea
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyPress={handleKeyPress}
+        placeholder="Ask anything about your documents..."
+        className="w-full h-40 p-6 text-lg rounded-xl resize-none shadow-chatgpt hover:shadow-chatgpt-hover focus:shadow-chatgpt-hover transition-all duration-200"
+        style={{
+          backgroundColor: 'var(--background-secondary)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-subtle)'
+        }}
+        rows={5}
+      />
       <button
-        type="submit"
-        className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-gray-900"
+        onClick={handleSubmit}
+        disabled={!query.trim()}
+        className="absolute bottom-4 right-4 p-3 rounded-xl shadow-chatgpt hover:shadow-chatgpt-hover disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        style={{
+          backgroundColor: 'var(--accent)',
+          color: '#ffffff'
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
       >
-        Search
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+        </svg>
       </button>
-    </form>
+    </div>
   );
 }

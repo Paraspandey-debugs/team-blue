@@ -1,68 +1,71 @@
-@import "tailwindcss";@import "tailwindcss";
+@import "tailwindcss";
 
+:root {
+  /* ChatGPT-inspired Light Theme Colors */
+  --background-primary: #FFFFFF;
+  --background-secondary: #F7F7F8;
+  --accent: #10A37F;
+  --accent-hover: #1A7F64;
+  --text-primary: #202123;
+  --text-secondary: #565869;
+  --border-subtle: rgba(0,0,0,0.1);
 
-
-:root {:root {
-
-  --background: #ffffff;  --background: #ffffff;
-
-  --foreground: #171717;  --foreground: #171717;
-
-}  --card: #ffffff;
-
-  --card-foreground: #171717;
-
-@media (prefers-color-scheme: dark) {  --popover: #ffffff;
-
-  :root {  --popover-foreground: #171717;
-
-    --background: #0a0a0a;  --primary: #2563eb;
-
-    --foreground: #ededed;  --primary-foreground: #ffffff;
-
-  }  --secondary: #f1f5f9;
-
-}  --secondary-foreground: #0f172a;
-
-  --muted: #f1f5f9;
-
-body {  --muted-foreground: #64748b;
-
-  background-color: hsl(var(--background));  --accent: #f1f5f9;
-
-  color: hsl(var(--foreground));  --accent-foreground: #0f172a;
-
-}  --destructive: #ef4444;
+  /* Legacy Tailwind variables for compatibility */
+  --background: var(--background-primary);
+  --foreground: var(--text-primary);
+  --card: var(--background-secondary);
+  --card-foreground: var(--text-primary);
+  --popover: var(--background-secondary);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--background-secondary);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--background-secondary);
+  --muted-foreground: var(--text-secondary);
+  --accent-tw: var(--accent);
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #2563eb;
-  --radius: 0.5rem;
+  --border: var(--border-subtle);
+  --input: var(--background-secondary);
+  --ring: var(--accent);
+  --radius: 0.75rem;
   --font-geist-sans: 'Geist', sans-serif;
   --font-geist-mono: 'Geist Mono', monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --card: #1a1a1a;
-    --card-foreground: #ededed;
-    --popover: #1a1a1a;
-    --popover-foreground: #ededed;
-    --primary: #3b82f6;
+    /* ChatGPT-inspired Dark Theme Colors */
+    --background-primary: #343541;
+    --background-secondary: #444654;
+    --accent: #10A37F;
+    --accent-hover: #1A7F64;
+    --text-primary: #ECECF1;
+    --text-secondary: #C5C5D2;
+    --border-subtle: rgba(255,255,255,0.1);
+
+    /* Legacy Tailwind variables for compatibility */
+    --background: var(--background-primary);
+    --foreground: var(--text-primary);
+    --card: var(--background-secondary);
+    --card-foreground: var(--text-primary);
+    --popover: var(--background-secondary);
+    --popover-foreground: var(--text-primary);
+    --primary: var(--accent);
     --primary-foreground: #ffffff;
-    --secondary: #1e293b;
-    --secondary-foreground: #f1f5f9;
-    --muted: #1e293b;
-    --muted-foreground: #94a3b8;
-    --accent: #1e293b;
-    --accent-foreground: #f1f5f9;
+    --secondary: var(--background-secondary);
+    --secondary-foreground: var(--text-primary);
+    --muted: var(--background-secondary);
+    --muted-foreground: var(--text-secondary);
+    --accent-tw: var(--accent);
+    --accent-foreground: #ffffff;
     --destructive: #dc2626;
     --destructive-foreground: #ffffff;
-    --border: #334155;
-    --input: #334155;
-    --ring: #3b82f6;
+    --border: var(--border-subtle);
+    --input: var(--background-secondary);
+    --ring: var(--accent);
   }
 }
 
@@ -74,6 +77,32 @@ body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* ChatGPT-inspired animations and transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+button {
+  transition: all 0.2s ease, transform 0.1s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+/* Subtle drop shadows */
+.shadow-chatgpt {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.shadow-chatgpt-hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.1);
 }
 
 /* Ensure proper text contrast */
