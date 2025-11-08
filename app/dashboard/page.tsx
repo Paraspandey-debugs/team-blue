@@ -28,11 +28,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
       {/* Animated background */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-10 left-10 w-72 h-72 bg-blue-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-bounce dark:bg-blue-900 dark:opacity-20"></div>
-        <div className="absolute top-40 right-10 w-72 h-72 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-bounce animation-delay-1000 dark:bg-purple-900 dark:opacity-20"></div>
-        <div className="absolute bottom-10 left-1/2 w-72 h-72 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-bounce animation-delay-2000 dark:bg-pink-900 dark:opacity-20"></div>
-      </div>
+      
 
       <div className="relative">
         {/* Header */}
@@ -46,7 +42,7 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                   </div>
-                  <h1 className="text-2xl font-bold text-gray-900 dark:text-white">ClauseIQ Dashboard</h1>
+                  <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Atlas</h1>
                 </div>
               </div>
               <button
