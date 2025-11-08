@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Pinecone } from "@pinecone-database/pinecone";
 import * as jwt from "jsonwebtoken";
+import { MongoClient } from "mongodb";
 
 // ==========================
 // CONFIG & CONNECTION POOLING
@@ -196,12 +197,12 @@ export async function POST(req: Request) {
       throw new Error("Failed to process search query");
     }
 
-    // Search in Pinecone
+    // Search in Pinecone for chunks
     const queryResponse = await index.namespace(namespace).query({
       vector: qEmb,
-      topK: 5,
+      topK: 20, // Get more chunks to group by documents
       includeMetadata: true,
-      includeValues: false, // Don't return the full vectors to save bandwidth
+      includeValues: false,
     });
 
     const matches = queryResponse.matches || [];
@@ -211,44 +212,81 @@ export async function POST(req: Request) {
       console.log(`[${user.userId}] No results found in namespace ${namespace} in ${processingTime}ms`);
 
       return Response.json({
-        answer: "The provided case documents do not contain this information.",
+        documents: [],
+        totalResults: 0,
         used_case: namespace,
-        retrieved_chunks: 0,
         processingTimeMs: processingTime
       });
     }
 
-    // Extract context from matches
-    const context = matches
-      .map(match => match.metadata?.content as string || "")
-      .filter(content => content && typeof content === 'string' && content.length > 0)
-      .join("\n\n");
+    // Group chunks by document and calculate document-level relevance
+    const docScores = new Map<string, { score: number; chunks: any[]; count: number }>();
 
-    // Generate answer grounded ONLY in retrieved text
-    const prompt = `You are a legal reasoning assistant. Answer ONLY using the context below. If the answer is not in the context, say: "The provided case documents do not contain this information."
+    for (const match of matches) {
+      const docId = match.metadata?.docId as string;
+      if (!docId) continue;
 
-Context:
-${context}
+      const existing = docScores.get(docId) || { score: 0, chunks: [], count: 0 };
+      existing.score += match.score || 0;
+      existing.chunks.push(match);
+      existing.count += 1;
+      docScores.set(docId, existing);
+    }
 
-Question: ${query}`;
+    // Sort documents by average relevance score
+    const sortedDocs = Array.from(docScores.entries())
+      .map(([docId, data]) => ({
+        docId,
+        relevanceScore: data.score / data.chunks.length, // Average score
+        chunkCount: data.count,
+        bestChunk: data.chunks[0], // Use first chunk for preview
+      }))
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 10); // Top 10 documents
 
-    const response = await chatModel.generateContent(prompt);
-    const answer = response.response.text();
+    // Fetch document metadata from MongoDB
+    const { MongoClient } = await import('mongodb');
+    const client = new MongoClient(process.env.MONGODB_URI!);
+    await client.connect();
+    const db = client.db('clauseiq');
+
+    const docIds = sortedDocs.map(d => d.docId);
+    const documents = await db.collection('documents').find({
+      docId: { $in: docIds },
+      uploadedBy: user.userId // Only return user's own documents
+    }).toArray();
+
+    await client.close();
+
+    // Create document results with metadata
+    const results = sortedDocs.map(docData => {
+      const mongoDoc = documents.find(d => d.docId === docData.docId);
+      if (!mongoDoc) return null;
+
+      return {
+        docId: docData.docId,
+        fileName: mongoDoc.fileName,
+        fileType: mongoDoc.fileType,
+        fileUrl: mongoDoc.fileUrl,
+        uploadedAt: mongoDoc.uploadedAt,
+        totalChunks: mongoDoc.totalChunks,
+        totalCharacters: mongoDoc.totalCharacters,
+        metadata: mongoDoc.metadata,
+        relevanceScore: docData.relevanceScore,
+        chunkCount: docData.chunkCount,
+        previewText: docData.bestChunk.metadata?.content?.substring(0, 300) + "..." || "",
+        labels: mongoDoc.labels || [], // For user labeling
+      };
+    }).filter(Boolean);
 
     const processingTime = Date.now() - startTime;
-    console.log(`[${user.userId}] Search completed in namespace ${namespace} in ${processingTime}ms, found ${matches.length} chunks`);
+    console.log(`[${user.userId}] Search completed in namespace ${namespace} in ${processingTime}ms, found ${results.length} documents`);
 
     return Response.json({
-      answer,
+      documents: results,
+      totalResults: results.length,
       used_case: namespace,
-      retrieved_chunks: matches.length,
       processingTimeMs: processingTime,
-      // Optional: return match scores for debugging
-      match_scores: matches.map(match => ({
-        score: match.score,
-        content_preview: typeof match.metadata?.content === 'string' ?
-          match.metadata.content.substring(0, 100) + "..." : "N/A"
-      }))
     });
 
   } catch (error: any) {

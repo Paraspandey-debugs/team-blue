@@ -14,6 +14,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "canvas": "^3.2.0",
     "cloudinary": "^2.8.0",
+    "dotenv": "^17.2.3",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.11.0",
     "mongodb": "^7.0.0",
